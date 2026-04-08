@@ -2,7 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const authRoutes = require('./routes/authRoutes');
 const carRoutes = require('./routes/carRoutes');
@@ -18,7 +19,12 @@ app.use(helmet());
 // CORS
 // IMPORTANT: Browsers will reject `Access-Control-Allow-Origin: *` when `credentials: true`.
 // So we explicitly allow common local dev origins + any origins you list in FRONTEND_ORIGIN.
-const defaultDevOrigins = ['http://localhost:5500', 'http://127.0.0.1:5500'];
+const defaultDevOrigins = [
+  'http://localhost:5500',
+  'http://127.0.0.1:5500',
+  'http://localhost:5000',
+  'http://127.0.0.1:5000',
+];
 const envOrigins = (process.env.FRONTEND_ORIGIN || '')
   .split(',')
   .map(s => s.trim())
@@ -62,6 +68,10 @@ app.use('/api/auth', authRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/cars', carRoutes);
 app.use('/api/bookings', bookingRoutes);
+
+// Serve frontend static files (so /login.html works for email verification links on same port as API)
+const frontendDir = path.join(__dirname, '..', '..', 'Frontend');
+app.use(express.static(frontendDir));
 
 // 404 + error handling
 app.use(notFoundHandler);

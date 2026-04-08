@@ -1,8 +1,20 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
-const { createUser, createGoogleUser, findUserByEmail, findUserByGoogleId } = require('../models/userModel');
+const {
+  createUser,
+  createGoogleUser,
+  findUserByEmail,
+  findUserByGoogleId,
+  findUserById,
+  updateUserProfile,
+} = require('../models/userModel');
 const { pool } = require('../config/db');
+const {
+  sendEmail,
+  buildVerificationEmail,
+} = require('../services/emailService');
 
 function signToken(user) {
   const payload = {
@@ -12,6 +24,22 @@ function signToken(user) {
   const secret = process.env.JWT_SECRET || 'dev-secret';
   const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
   return jwt.sign(payload, secret, { expiresIn });
+}
+
+function getFrontendBaseUrl() {
+  const fromEnv = (process.env.FRONTEND_ORIGIN || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  return fromEnv[0] || 'http://localhost:5500';
+}
+
+async function sendVerificationEmail({ email, name, token }) {
+  const verifyBase = process.env.FRONTEND_VERIFY_URL || `${getFrontendBaseUrl()}/verify-email.html`;
+  const separator = verifyBase.includes('?') ? '&' : '?';
+  const verificationUrl = `${verifyBase}${separator}verifyToken=${encodeURIComponent(token)}`;
+  const mail = buildVerificationEmail({ name, verificationUrl });
+  await sendEmail({ to: email, ...mail });
 }
 
 async function signup(req, res, next) {
@@ -28,12 +56,21 @@ async function signup(req, res, next) {
 
     const hash = await bcrypt.hash(password, 10);
     const user = await createUser({ name, email, passwordHash: hash });
-    const token = signToken(user);
+    const verifyToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24h
 
-    res.status(201).json({
-      token,
-      user,
-    });
+    await pool.query(
+      `
+      UPDATE users
+      SET email_verification_token = $2, email_verification_expires = $3
+      WHERE id = $1
+      `,
+      [user.id, verifyToken, expiresAt]
+    );
+
+    await sendVerificationEmail({ email: user.email, name: user.name, token: verifyToken });
+
+    res.status(201).json({ message: 'Account created. Please verify your email before login.' });
   } catch (err) {
     next(err);
   }
@@ -53,6 +90,10 @@ async function login(req, res, next) {
 
     if (!user.password_hash) {
       return res.status(401).json({ message: 'Use Google sign-in for this account' });
+    }
+
+    if (!user.email_verified) {
+      return res.status(403).json({ message: 'Please verify your email before login' });
     }
 
     const valid = await bcrypt.compare(password, user.password_hash);
@@ -114,6 +155,9 @@ async function googleLogin(req, res, next) {
             avatarUrl,
           ]);
         }
+        if (!existingByEmail.email_verified) {
+          await pool.query(`UPDATE users SET email_verified = TRUE WHERE id = $1`, [existingByEmail.id]);
+        }
         user = await findUserByEmail(email);
       } else {
         user = await createGoogleUser({ name, email, googleId, avatarUrl });
@@ -131,11 +175,121 @@ async function googleLogin(req, res, next) {
 }
 
 function googleClientId(req, res) {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) {
-    return res.status(500).json({ message: 'Google login not configured' });
+  const clientId = process.env.GOOGLE_CLIENT_ID || null;
+  return res.json({
+    clientId,
+    configured: Boolean(clientId),
+  });
+}
+
+async function verifyEmail(req, res, next) {
+  try {
+    const token = (req.query.token || '').trim();
+    if (!token) {
+      return res.status(400).json({ message: 'Verification token is required' });
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE users
+      SET
+        email_verified = TRUE,
+        email_verification_token = NULL,
+        email_verification_expires = NULL
+      WHERE email_verification_token = $1
+        AND email_verification_expires > NOW()
+      RETURNING id
+      `,
+      [token]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(400).json({ message: 'Invalid or expired verification link' });
+    }
+
+    return res.json({ message: 'Email verified successfully. You can now login.' });
+  } catch (err) {
+    return next(err);
   }
-  return res.json({ clientId });
+}
+
+async function resendVerification(req, res, next) {
+  try {
+    const email = (req.body.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const user = await findUserByEmail(email);
+    if (!user) {
+      return res.status(404).json({ message: 'Account not found' });
+    }
+
+    if (user.email_verified) {
+      return res.json({ message: 'Email already verified' });
+    }
+
+    const verifyToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24);
+
+    await pool.query(
+      `
+      UPDATE users
+      SET email_verification_token = $2, email_verification_expires = $3
+      WHERE id = $1
+      `,
+      [user.id, verifyToken, expiresAt]
+    );
+
+    await sendVerificationEmail({ email: user.email, name: user.name, token: verifyToken });
+    return res.json({ message: 'Verification email sent' });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function getMe(req, res, next) {
+  try {
+    const user = await findUserById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    return res.json({ user });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function updateProfile(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { name, avatarUrl } = req.body || {};
+
+    const normalizedName = typeof name === 'string' ? name.trim() : null;
+    const normalizedAvatarUrl = typeof avatarUrl === 'string' ? avatarUrl.trim() : null;
+
+    if (!normalizedName && !normalizedAvatarUrl) {
+      return res.status(400).json({ message: 'Provide name or avatarUrl' });
+    }
+
+    // Accept either regular URL or a small data URL for local uploads.
+    if (normalizedAvatarUrl && normalizedAvatarUrl.length > 1_500_000) {
+      return res.status(400).json({ message: 'Avatar image is too large' });
+    }
+
+    const updated = await updateUserProfile(userId, {
+      name: normalizedName || null,
+      avatarUrl: normalizedAvatarUrl || null,
+    });
+
+    if (!updated) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    return res.json({ user: updated });
+  } catch (err) {
+    return next(err);
+  }
 }
 
 // POST /auth/google-login
@@ -180,8 +334,11 @@ async function googleLoginCompat(req, res) {
       ON CONFLICT (email)
       DO UPDATE SET
         name = EXCLUDED.name,
-        avatar_url = COALESCE(users.avatar_url, EXCLUDED.avatar_url)
-      RETURNING id, name, email, avatar_url, created_at
+        avatar_url = COALESCE(users.avatar_url, EXCLUDED.avatar_url),
+        email_verified = TRUE,
+        email_verification_token = NULL,
+        email_verification_expires = NULL
+      RETURNING id, name, email, email_verified, avatar_url, created_at
       `,
       [name, email, picture]
     );
@@ -212,5 +369,9 @@ module.exports = {
   googleLogin,
   googleClientId,
   googleLoginCompat,
+  verifyEmail,
+  resendVerification,
+  getMe,
+  updateProfile,
 };
 

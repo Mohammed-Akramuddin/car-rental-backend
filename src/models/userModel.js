@@ -5,7 +5,7 @@ async function createUser({ name, email, passwordHash }) {
     `
     INSERT INTO users (name, email, password_hash)
     VALUES ($1, $2, $3)
-    RETURNING id, name, email, avatar_url, loyalty_points, created_at
+    RETURNING id, name, email, email_verified, avatar_url, loyalty_points, created_at
     `,
     [name, email.toLowerCase(), passwordHash]
   );
@@ -15,9 +15,9 @@ async function createUser({ name, email, passwordHash }) {
 async function createGoogleUser({ name, email, googleId, avatarUrl }) {
   const result = await pool.query(
     `
-    INSERT INTO users (name, email, google_id, avatar_url, password_hash)
-    VALUES ($1, $2, $3, $4, NULL)
-    RETURNING id, name, email, avatar_url, loyalty_points, created_at
+    INSERT INTO users (name, email, google_id, avatar_url, password_hash, email_verified)
+    VALUES ($1, $2, $3, $4, NULL, TRUE)
+    RETURNING id, name, email, email_verified, avatar_url, loyalty_points, created_at
     `,
     [name, email.toLowerCase(), googleId, avatarUrl || null]
   );
@@ -27,7 +27,7 @@ async function createGoogleUser({ name, email, googleId, avatarUrl }) {
 async function findUserByGoogleId(googleId) {
   const result = await pool.query(
     `
-    SELECT id, name, email, password_hash, google_id, avatar_url, loyalty_points, created_at
+    SELECT id, name, email, password_hash, google_id, email_verified, avatar_url, loyalty_points, created_at
     FROM users
     WHERE google_id = $1
     `,
@@ -39,7 +39,7 @@ async function findUserByGoogleId(googleId) {
 async function findUserByEmail(email) {
   const result = await pool.query(
     `
-    SELECT id, name, email, password_hash, google_id, avatar_url, loyalty_points, created_at
+    SELECT id, name, email, password_hash, google_id, email_verified, avatar_url, loyalty_points, created_at
     FROM users
     WHERE email = $1
     `,
@@ -51,7 +51,7 @@ async function findUserByEmail(email) {
 async function findUserById(id) {
   const result = await pool.query(
     `
-    SELECT id, name, email, avatar_url, loyalty_points, created_at
+    SELECT id, name, email, email_verified, avatar_url, loyalty_points, created_at
     FROM users
     WHERE id = $1
     `,
@@ -68,7 +68,7 @@ async function updateUserProfile(id, { name, avatarUrl }) {
       name = COALESCE($2, name),
       avatar_url = COALESCE($3, avatar_url)
     WHERE id = $1
-    RETURNING id, name, email, avatar_url, loyalty_points, created_at
+    RETURNING id, name, email, email_verified, avatar_url, loyalty_points, created_at
     `,
     [id, name, avatarUrl]
   );

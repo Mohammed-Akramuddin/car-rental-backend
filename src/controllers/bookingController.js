@@ -1,5 +1,10 @@
 const { getCarById } = require('../models/carModel');
-const { createBooking, getBookingsByUser, isCarAvailable } = require('../models/bookingModel');
+const { createBooking, getBookingsByUser, isCarAvailable, cancelBookingByIdAndUser } = require('../models/bookingModel');
+const {
+  sendEmail,
+  buildBookingCreatedEmail,
+  buildBookingCancelledEmail,
+} = require('../services/emailService');
 
 async function createBookingController(req, res, next) {
   try {
@@ -61,6 +66,17 @@ async function createBookingController(req, res, next) {
       totalPrice,
     });
 
+    await sendEmail({
+      to: req.user.email,
+      ...buildBookingCreatedEmail({
+        name: req.user.name,
+        carName: car.name,
+        pickupDate,
+        dropDate,
+        totalPrice,
+      }),
+    });
+
     res.status(201).json(booking);
   } catch (err) {
     next(err);
@@ -77,8 +93,36 @@ async function getMyBookings(req, res, next) {
   }
 }
 
+async function cancelBooking(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { bookingId } = req.params;
+    const booking = await cancelBookingByIdAndUser({ bookingId, userId });
+
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found or already cancelled' });
+    }
+
+    const car = await getCarById(booking.car_id);
+    await sendEmail({
+      to: req.user.email,
+      ...buildBookingCancelledEmail({
+        name: req.user.name,
+        carName: car ? car.name : 'your car',
+        pickupDate: booking.pickup_date,
+        dropDate: booking.drop_date,
+      }),
+    });
+
+    return res.json({ message: 'Booking cancelled', booking });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   createBooking: createBookingController,
   getMyBookings,
+  cancelBooking,
 };
 

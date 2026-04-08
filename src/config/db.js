@@ -1,5 +1,8 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const connectionString =
   process.env.DATABASE_URL ||
@@ -28,6 +31,9 @@ async function initDb() {
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT,
         google_id TEXT UNIQUE,
+        email_verified BOOLEAN DEFAULT FALSE,
+        email_verification_token TEXT,
+        email_verification_expires TIMESTAMPTZ,
         avatar_url TEXT,
         loyalty_points INTEGER DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT NOW()
@@ -36,6 +42,9 @@ async function initDb() {
 
     // Backward-compatible migrations for existing DBs
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE;`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token TEXT;`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expires TIMESTAMPTZ;`);
     await client.query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
 
     await client.query(`

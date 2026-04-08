@@ -66,6 +66,31 @@ async function getBookingsByUser(userId) {
   return result.rows;
 }
 
+async function cancelBookingByIdAndUser({ bookingId, userId }) {
+  const result = await pool.query(
+    `
+    UPDATE bookings b
+    SET status = 'cancelled'
+    WHERE b.id = $1
+      AND b.user_id = $2
+      AND b.status <> 'cancelled'
+    RETURNING
+      b.id,
+      b.pickup_date,
+      b.drop_date,
+      b.delivery_option,
+      b.address,
+      b.total_days,
+      b.total_price,
+      b.status,
+      b.created_at,
+      b.car_id
+    `,
+    [bookingId, userId]
+  );
+  return result.rows[0] || null;
+}
+
 async function isCarAvailable({ carId, pickupDate, dropDate }) {
   const result = await pool.query(
     `
@@ -85,5 +110,6 @@ module.exports = {
   createBooking,
   getBookingsByUser,
   isCarAvailable,
+  cancelBookingByIdAndUser,
 };
 
