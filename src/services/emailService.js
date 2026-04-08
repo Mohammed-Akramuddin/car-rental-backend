@@ -1,61 +1,50 @@
-const nodemailer = require('nodemailer');
+const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 
 /**
- * Create SMTP transporter for Brevo
- */
-function getTransporter() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 465);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: {
-      user,
-      pass,
-    },
-    connectionTimeout: 10000,
-    greetingTimeout: 5000,
-    socketTimeout: 10000,
-    tls: {
-      rejectUnauthorized: false,
-    },
-  });
-}
-
-/**
- * Send email safely
- * Email failure should not crash signup/booking
+ * Send email using Brevo API
  */
 async function sendEmail({ to, subject, html, text }) {
-  const transporter = getTransporter();
+  const apiKey = process.env.BREVO_API_KEY;
+  const senderEmail = process.env.BREVO_SENDER_EMAIL;
+  const senderName = process.env.BREVO_SENDER_NAME || "DRIVE";
 
-  if (!transporter) {
-    console.warn('SMTP not configured: email skipped');
+  if (!apiKey || !senderEmail) {
+    console.warn("Brevo not configured: email skipped");
     return { skipped: true };
   }
 
-  const from = process.env.EMAIL_FROM || process.env.SMTP_USER;
+  const payload = {
+    sender: {
+      name: senderName,
+      email: senderEmail,
+    },
+    to: Array.isArray(to)
+      ? to.map((email) => ({ email }))
+      : [{ email: to }],
+    subject,
+    htmlContent: html,
+    textContent: text,
+  };
 
   try {
-    await transporter.sendMail({
-      from,
-      to,
-      subject,
-      html,
-      text,
+    const response = await fetch(BREVO_API_URL, {
+      method: "POST",
+      headers: {
+        "api-key": apiKey,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify(payload),
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Brevo API error ${response.status}: ${errorText}`);
+    }
 
     return { skipped: false };
   } catch (error) {
-    console.error('❌ Email failed:', error.message);
+    console.error("❌ Email failed:", error.message);
     return { skipped: true, error: error.message };
   }
 }
@@ -64,14 +53,14 @@ async function sendEmail({ to, subject, html, text }) {
  * Verification Email
  */
 function buildVerificationEmail({ name, verificationUrl }) {
-  const safeName = name || 'there';
+  const safeName = name || "there";
 
   return {
-    subject: 'Verify your DRIVE account',
+    subject: "Verify your DRIVE account",
     text: `Hi ${safeName}, verify your email: ${verificationUrl}`,
     html: buildDriveTemplate({
-      title: 'Verify Your DRIVE Account',
-      subtitle: 'Complete your account setup to start booking premium rides.',
+      title: "Verify Your DRIVE Account",
+      subtitle: "Complete your account setup to start booking premium rides.",
       content: `
         <p style="margin:0 0 14px;">Hi ${safeName},</p>
         <p style="margin:0 0 18px;">Thanks for joining DRIVE. Verify your email to activate sign-in and bookings.</p>
@@ -89,21 +78,21 @@ function buildVerificationEmail({ name, verificationUrl }) {
  * Booking Confirmed Email
  */
 function buildBookingCreatedEmail({ name, carName, pickupDate, dropDate, totalPrice }) {
-  const safeName = name || 'Customer';
+  const safeName = name || "Customer";
 
   return {
-    subject: 'Your DRIVE booking is confirmed',
+    subject: "Your DRIVE booking is confirmed",
     text: `Hi ${safeName}, your booking for ${carName} is confirmed. ${pickupDate} to ${dropDate}. Total: Rs ${totalPrice}.`,
     html: buildDriveTemplate({
-      title: 'Booking Confirmed',
-      subtitle: 'Your ride is locked in. We are ready when you are.',
+      title: "Booking Confirmed",
+      subtitle: "Your ride is locked in. We are ready when you are.",
       content: `
         <p style="margin:0 0 14px;">Hi ${safeName}, your booking is confirmed.</p>
         ${buildInfoGrid([
-          ['Car', carName],
-          ['Pickup', pickupDate],
-          ['Drop', dropDate],
-          ['Total', `Rs ${totalPrice}`],
+          ["Car", carName],
+          ["Pickup", pickupDate],
+          ["Drop", dropDate],
+          ["Total", `Rs ${totalPrice}`],
         ])}
       `,
     }),
@@ -114,20 +103,20 @@ function buildBookingCreatedEmail({ name, carName, pickupDate, dropDate, totalPr
  * Booking Cancelled Email
  */
 function buildBookingCancelledEmail({ name, carName, pickupDate, dropDate }) {
-  const safeName = name || 'Customer';
+  const safeName = name || "Customer";
 
   return {
-    subject: 'Your DRIVE booking was cancelled',
+    subject: "Your DRIVE booking was cancelled",
     text: `Hi ${safeName}, your booking for ${carName} (${pickupDate} to ${dropDate}) has been cancelled.`,
     html: buildDriveTemplate({
-      title: 'Booking Cancelled',
-      subtitle: 'Your reservation was cancelled successfully.',
+      title: "Booking Cancelled",
+      subtitle: "Your reservation was cancelled successfully.",
       content: `
         <p style="margin:0 0 14px;">Hi ${safeName}, your booking has been cancelled.</p>
         ${buildInfoGrid([
-          ['Car', carName],
-          ['Pickup', pickupDate],
-          ['Drop', dropDate],
+          ["Car", carName],
+          ["Pickup", pickupDate],
+          ["Drop", dropDate],
         ])}
       `,
     }),
@@ -143,13 +132,13 @@ function buildInfoGrid(items) {
       ${items
         .map(
           ([k, v], idx) => `
-            <div style="display:flex;justify-content:space-between;gap:12px;padding:11px 14px;background:${idx % 2 ? '#f8fafc' : '#ffffff'};">
+            <div style="display:flex;justify-content:space-between;gap:12px;padding:11px 14px;background:${idx % 2 ? "#f8fafc" : "#ffffff"};">
               <span style="color:#475569;font-size:13px;">${k}</span>
               <strong style="color:#0f172a;font-size:13px;">${v}</strong>
             </div>
           `
         )
-        .join('')}
+        .join("")}
     </div>
   `;
 }
